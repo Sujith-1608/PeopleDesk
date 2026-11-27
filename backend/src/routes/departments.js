@@ -1,17 +1,18 @@
+
 import { Router } from 'express';
-import pool from '../db.js';
+import pool from '../db-postgres.js';
 
 const router = Router();
 
 // GET: Fetch all departments with employee counts.
 router.get('/', async (_req, res, next) => {
   try {
-    const [rows] = await pool.query(`
+    const { rows } = await pool.query(`
       SELECT
         d.*,
-        COUNT(e.emp_id) AS employee_count
-      FROM Departments d
-      LEFT JOIN Employees e
+        COUNT(e.emp_id)::int AS employee_count
+      FROM departments d
+      LEFT JOIN employees e
         ON e.department_id = d.department_id
       GROUP BY d.department_id
       ORDER BY d.department_name
@@ -34,14 +35,18 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    const [result] = await pool.execute(
-      `INSERT INTO Departments (department_name, location)
-       VALUES (?, ?)`,
-      [department_name.trim(), location?.trim() || null]
+    const { rows } = await pool.query(
+      `INSERT INTO departments (department_name, location)
+       VALUES ($1, $2)
+       RETURNING department_id`,
+      [
+        department_name.trim(),
+        location?.trim() || null
+      ]
     );
 
     res.status(201).json({
-      department_id: result.insertId,
+      department_id: rows[0].department_id,
       message: 'Department created'
     });
   } catch (err) {
@@ -67,10 +72,11 @@ router.put('/:id', async (req, res, next) => {
       });
     }
 
-    const [result] = await pool.execute(
-      `UPDATE Departments
-       SET department_name = ?, location = ?
-       WHERE department_id = ?`,
+    const result = await pool.query(
+      `UPDATE departments
+       SET department_name = $1,
+           location = $2
+       WHERE department_id = $3`,
       [
         department_name.trim(),
         location?.trim() || null,
@@ -78,17 +84,10 @@ router.put('/:id', async (req, res, next) => {
       ]
     );
 
-    if (result.affectedRows === 0) {
-      const [existing] = await pool.execute(
-        'SELECT department_id FROM Departments WHERE department_id = ?',
-        [departmentId]
-      );
-
-      if (existing.length === 0) {
-        return res.status(404).json({
-          message: 'Department not found'
-        });
-      }
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        message: 'Department not found'
+      });
     }
 
     res.json({
@@ -110,8 +109,8 @@ router.delete('/:id', async (req, res, next) => {
       });
     }
 
-    const [departments] = await pool.execute(
-      'SELECT department_id FROM Departments WHERE department_id = ?',
+    const { rows: departments } = await pool.query(
+      'SELECT department_id FROM departments WHERE department_id = $1',
       [departmentId]
     );
 
@@ -121,8 +120,10 @@ router.delete('/:id', async (req, res, next) => {
       });
     }
 
-    const [employees] = await pool.execute(
-      'SELECT COUNT(*) AS employee_count FROM Employees WHERE department_id = ?',
+    const { rows: employees } = await pool.query(
+      `SELECT COUNT(*)::int AS employee_count
+       FROM employees
+       WHERE department_id = $1`,
       [departmentId]
     );
 
@@ -132,8 +133,8 @@ router.delete('/:id', async (req, res, next) => {
       });
     }
 
-    await pool.execute(
-      'DELETE FROM Departments WHERE department_id = ?',
+    await pool.query(
+      'DELETE FROM departments WHERE department_id = $1',
       [departmentId]
     );
 

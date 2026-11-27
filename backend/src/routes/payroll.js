@@ -1,18 +1,18 @@
 
 import { Router } from 'express';
-import pool from '../db.js';
+import pool from '../db-postgres.js';
 
 const router = Router();
 
 // GET: Fetch all payroll records.
 router.get('/', async (_req, res, next) => {
   try {
-    const [rows] = await pool.query(`
+    const { rows } = await pool.query(`
       SELECT
         p.*,
         CONCAT(e.first_name, ' ', e.last_name) AS employee_name
-      FROM Payroll p
-      JOIN Employees e ON e.emp_id = p.emp_id
+      FROM payroll p
+      JOIN employees e ON e.emp_id = p.emp_id
       ORDER BY p.payroll_month DESC, p.payroll_id DESC
     `);
 
@@ -24,7 +24,7 @@ router.get('/', async (_req, res, next) => {
 
 // POST: Generate payroll.
 router.post('/', async (req, res, next) => {
-  const conn = await pool.getConnection();
+  let client;
   let transactionStarted = false;
 
   try {
@@ -64,21 +64,23 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    await conn.beginTransaction();
+    client = await pool.connect();
+
+    await client.query('BEGIN');
     transactionStarted = true;
 
     // Allow both Active and On Leave employees.
-    const [employees] = await conn.execute(
+    const { rows: employees } = await client.query(
       `SELECT base_salary
-       FROM Employees
-       WHERE emp_id = ?
-       AND employment_status IN ('Active', 'On Leave')
+       FROM employees
+       WHERE emp_id = $1
+         AND employment_status IN ('Active', 'On Leave')
        FOR UPDATE`,
       [employeeId]
     );
 
     if (employees.length === 0) {
-      await conn.rollback();
+      await client.query('ROLLBACK');
       transactionStarted = false;
 
       return res.status(404).json({
@@ -89,7 +91,7 @@ router.post('/', async (req, res, next) => {
     const basicSalary = Number(employees[0].base_salary);
 
     if (basicSalary + allowanceAmount < deductionAmount) {
-      await conn.rollback();
+      await client.query('ROLLBACK');
       transactionStarted = false;
 
       return res.status(400).json({
@@ -97,10 +99,11 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    const [result] = await conn.execute(
-      `INSERT INTO Payroll
+    const { rows } = await client.query(
+      `INSERT INTO payroll
        (emp_id, payroll_month, basic_salary, allowances, deductions)
-       VALUES (?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING payroll_id`,
       [
         employeeId,
         payroll_month,
@@ -110,22 +113,28 @@ router.post('/', async (req, res, next) => {
       ]
     );
 
-    await conn.commit();
+    await client.query('COMMIT');
     transactionStarted = false;
 
     res.status(201).json({
-      payroll_id: result.insertId,
+      payroll_id: rows[0].payroll_id,
       message: 'Payroll generated successfully'
     });
 
   } catch (err) {
-    if (transactionStarted) {
-      await conn.rollback();
+    if (transactionStarted && client) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        console.error('Payroll rollback failed:', rollbackError.message);
+      }
     }
 
     next(err);
   } finally {
-    conn.release();
+    if (client) {
+      client.release();
+    }
   }
 });
 
@@ -147,19 +156,19 @@ router.patch('/:id/status', async (req, res, next) => {
       });
     }
 
-    const paymentDate =
-      payment_status === 'Paid'
-        ? new Date().toISOString().slice(0, 10)
-        : null;
-
-    const [result] = await pool.execute(
-      `UPDATE Payroll
-       SET payment_status = ?, payment_date = ?
-       WHERE payroll_id = ?`,
-      [payment_status, paymentDate, payrollId]
+    const { rows } = await pool.query(
+      `UPDATE payroll
+       SET payment_status = $1,
+           payment_date = CASE
+             WHEN $1 = 'Paid' THEN CURRENT_DATE
+             ELSE NULL
+           END
+       WHERE payroll_id = $2
+       RETURNING payroll_id`,
+      [payment_status, payrollId]
     );
 
-    if (result.affectedRows === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({
         message: 'Payroll record not found'
       });
