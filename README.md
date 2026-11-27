@@ -78,6 +78,26 @@ The application is deployed using Vercel, Render, and Neon PostgreSQL.
 - Maintain previous and updated salary details.
 - Track salary change dates and reasons.
 
+## 📸 Application Screenshots
+
+### Login Page
+![PeopleDesk Login Page](screenshots/login-page.png)
+
+### Dashboard Overview
+![PeopleDesk Overview](screenshots/overview.png)
+
+### Employee Management
+![Employee Management](screenshots/employees.png)
+
+### Department Management
+![Department Management](screenshots/departments.png)
+
+### Leave Requests
+![Leave Requests](screenshots/leave-requests.png)
+
+### Payroll Management
+![Payroll Management](screenshots/payroll.png)
+
 ## 🛠️ Technology Stack
 
 | Layer | Technologies |
